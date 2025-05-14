@@ -1,0 +1,658 @@
+---
+title: "Descripcion Analisis - Accidentes en Oleoductos EEUU e Importaciones de Crudo"
+author: "Gimenez Nicolas"
+date: "2025-05-12"
+output:
+  word_document: default
+  pdf_document: default
+---
+#Analisis de Accidentes en Oleoductos de EEUU y su relacion con las Importaciones Anuales de Crudo
+El analisis se realizará en dos etapas. En primer lugar, se analizará el archivo "accidentes.csv", que tiene alojados una serie de datos referidos a reportes de accidentes en oleoductos de Estados Unidos. En segundo lugar, se analizará el archivo "imp_crudo.csv" que contiene informacion historica anualizada respecto a los volumenes de crudo importados en el ultimo tiempo de Estados Unidos
+
+## Analisis de Accidentes en Oleoductos de EEUU
+En primer lugar, se carga el ambiente de trabajo en el cual se desarrollará el analisis.
+```{r}
+install.packages("tidyverse")
+```
+Cargamos la librerìa
+```{r}
+library(tidyverse)
+```
+
+Acto seguido, se carga el archivo "accidentes.csv" a un dataframe que llamaremos accidentes_df:
+```{r}
+accidentes_df<- read.csv("accidentes.csv")
+```
+
+Hacemos una vista general de los primeros 10 datos que contiene:
+```{r}
+head(accidentes_df,n=10L)
+```
+
+Exploramos un poco mas las columnas y sus datos
+```{r}
+colnames(accidentes_df)
+#str(accidentes_df)
+```
+Viendo los datos, los nombres de las columnas, podemos hacer un analisis conceptual para dirigir el desarrollo hacia los objetivos del analisis: 
+•	Número total de accidentes por año y mes
+•	Volumen derramado o afectado
+•	Tipo y causa principal de los accidentes
+•	Volumen de crudo importado en cada período
+
+Se observa que existen varios conjuntos de datos interesantes para abordar en torno a un accidente en ductos de EEUU:
+- Hay una parte de los datos que habla sobre los costos totales y por clasificacion.
+-Luego, se observa un conjunto que habla de las fatalidades y lesionados relacionados a los eventos.
+- Tambien hay informacion relevante respecto a los derrames.
+- Finalmente, se tratará los operadores de ductos con mayor cantidad de eventos.
+
+Ahora bien, explorando los datos disponibles, podemos observar que hay una gran cantidad de datos en NA (non-available).Sobre todo en lo que refiere a lesionados y fatalidades. Esto es llamativo. 
+
+Pero avanzamos, y determinamos los costos totales, para entender cuanto dinero se gastó en accidentes de ductos.
+Para esto primero, realizamos un pivot a long, considerando los items referidos a costos, es decir todos aquellos que tienen la palabra "cost":
+```{r}
+accidentes_largo <- accidentes_df %>%
+  select(`Accident.Year`,
+         `Property.Damage.Costs`,
+         `Lost.Commodity.Costs`,
+         `Public.Private.Property.Damage.Costs`,
+         `Emergency.Response.Costs`,
+         `Environmental.Remediation.Costs`,
+         `Other.Costs`) %>%
+  pivot_longer(
+    cols = -`Accident.Year`,
+    names_to = "Tipo_Costo",
+    values_to = "Valor_Costo"
+  )
+```
+La tabla se vería así:
+```{r}
+head(accidentes_largo, n=10L)
+```
+Ahora bien, agrupamos y sumamos por tipo de costo. Los ordenamos de manera descendente:
+```{r}
+resumen_costos <- accidentes_largo %>%
+  group_by(`Accident.Year`, Tipo_Costo) %>%
+  summarise(Total = sum(Valor_Costo, na.rm = TRUE)) %>%
+  arrange(`Accident.Year`, desc(Total))
+head(resumen_costos)
+```
+
+Finalmente, agrupamos por año:
+```{r}
+resumen_costos_año <- accidentes_df %>%
+  group_by(`Accident.Year`) %>%
+  summarise(Total = sum(`All.Costs`, na.rm = TRUE))
+print(resumen_costos_año)
+```
+
+Si lo graficamos por año en un grafico de barras se observa:
+```{r}
+ggplot(resumen_costos_año, aes(x = `Accident.Year`, y = Total)) +
+  geom_col(fill = "blue") +
+  labs(
+    title = "Costos Totales por Año",
+    x = "Año del Accidente",
+    y = "Costo Total (USD)"
+  ) +
+  theme_bw()
+```
+
+Aqui hay algo interesante. No hay datos para los años 2017 en adelante. Mas adelante, exploramos esto. Ahora, graficamos costos en un grafico de barras compuesto donde se observa el desglose de los costos segun su clasificacion.
+```{r}
+ggplot(resumen_costos, aes(x = `Accident.Year`, y = Total, fill = Tipo_Costo)) +
+  geom_col(position = "stack") +
+  labs(
+    title = "Costos por Tipo y Año de Accidente",
+    x = "Año del Accidente",
+    y = "Costo Total (USD)",
+    fill = "Tipo de Costo"
+  ) +
+  theme_minimal()
+```
+Sin dudas en el 2010, hubieron muchos costos asociados a la remediacion ambiental y para los años siguientes, el costo por respuesta ante emergencia siempre fue superior al resto de los costos, salvo por los años 2012 y 2014.
+
+Ahora bien, nuevamente, los costos desde 2017 hasta la actualidad son 0. La pregunta es, ¿Hubieron accidentes? Bueno, analicemos si hubieron daños ambientales, fatalidades, etc.
+```{r}
+accidentes_df %>%
+  filter(`Accident.Year` >= 2017) %>%
+  count(`Accident.Year`)
+
+accidentes_df %>%
+  filter(`Accident.Year` >= 2017) %>%
+  summarise(Derrame = sum(`Net.Loss..Barrels.`, na.rm = TRUE))
+
+accidentes_df %>%
+  filter(`Accident.Year` >= 2017) %>%
+  summarise(Fatalidades = sum(`All.Fatalities`, na.rm = TRUE))
+
+accidentes_df %>%
+  filter(`Accident.Year` >= 2017) %>%
+  summarise(Lesionados = sum(`All.Injuries`, na.rm = TRUE))
+```
+Aqui hay un hallazgo interesante. Hay casos reportados entre 2017 y 2022 pero: fatalidades, lesionados, derrames y costos son 0. Por lo tanto, este periodo de tiempo no es util para nuestro analisis.Trabajaremos con los datos entre 2010 y 2016.
+
+Avanzamos un poco mas. Observar que hay una columna que indica cada operador y el caso reportado.¿Cuantos casos tuvo cada operador?
+```{r}
+q_casos_operadores <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017 )%>%
+  group_by(`Operator.Name`) %>%
+  summarise(Cantidad_Casos= n())%>%
+  arrange(desc(Cantidad_Casos))
+
+head(q_casos_operadores, n=10L)
+
+```
+Aqui detectamos que hay casos que no tienen el operador reportado (està vacìo, por lo que lo hacemos visible). Esto es un problema si tienen costos asociados. Por lo que determinamos que impacto tiene en los costos, ya que es una gran cantidad: 
+```{r}
+accidentes_df <- accidentes_df %>%
+  mutate(`Operator.Name` = na_if(`Operator.Name`, ""))
+```
+
+Determinamos el impacto:
+```{r}
+accidentes_df %>%
+  group_by(is.na(`Operator.Name`)) %>%
+  summarise(Total_Costos = sum(`All.Costs`, na.rm = TRUE),
+            Casos = n())
+```
+Se identifica que aproximadamente un 26% de los registros (1000 de 3795) no informan el nombre del operador responsable del accidente. Sin embargo, al analizar la columna All Costs, se observó que el 100% de los costos económicos están concentrados en los casos donde sí se reporta el operador. En consecuencia, se decidió excluir los registros con Operator Name = NA del análisis económico, ya que no aportan información relevante sobre impacto financiero.
+
+```{r}
+q_casos_operadores2 <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017 & !is.na(`Operator.Name`))%>%
+  group_by(`Operator.Name`) %>%
+  summarise(Cantidad_Casos= n())%>%
+  arrange(desc(Cantidad_Casos))
+
+```
+
+Si graficamos los casos por operador obtenemos: 
+```{r}
+ggplot(q_casos_operadores2, aes(x = reorder(`Operator.Name`, -Cantidad_Casos), y = Cantidad_Casos)) +
+  geom_bar(stat = "identity", fill = "#0073C2FF") +
+  labs(
+    title = "Cantidad de Casos por Operador",
+    x = "Operador",
+    y = "Cantidad de Casos"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Sin dudas, utilizar esta sentencia nos lleva a una grafica que no es clara, por lo que se aplicará el principio de pareto para determinar el 20% de operadores que concentrar el 80 % de los casos y se los listarà y graficarà
+Primero, determinamos el total de casos:
+```{r}
+total_casos <- sum(q_casos_operadores2$Cantidad_Casos)
+```
+Luego, determinamos la lista aplicando el Principio de Pareto
+```{r}
+casos_pareto <- q_casos_operadores2 %>%
+  arrange(desc(Cantidad_Casos)) %>%
+  mutate(
+    Porcentaje = Cantidad_Casos / total_casos,
+    Porcentaje_Acumulado = cumsum(Porcentaje)
+  )
+```
+Determinamos el top_operadores
+```{r}
+top_operadores <- casos_pareto %>%
+  filter(Porcentaje_Acumulado <= 0.8)
+```
+
+Finalmente, lo graficamos:
+```{r}
+ggplot(top_operadores, aes(x = reorder(`Operator.Name`, -Cantidad_Casos), y = Cantidad_Casos)) +
+  geom_bar(stat = "identity", fill = "#E69F00") +
+  labs(
+    title = "Operadores con el 80% de los Casos",
+    x = "Operador",
+    y = "Cantidad de Casos"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Estamos hablando de que 42 operadores concentran el 80% de los casos. El top ten es:
+```{r}
+top_10_casos <- top_operadores %>%
+  slice_max(order_by = Cantidad_Casos, n = 10)
+```
+
+
+Graficamos el top 10 de operadores con mayor cantidad de casos reportados:
+```{r}
+ggplot(top_10_casos, aes(x = reorder(`Operator.Name`, -Cantidad_Casos), y = Cantidad_Casos)) +
+  geom_bar(stat = "identity", fill = "red") +
+  labs(
+    title = "Top 10 Cantidad de Casos Operadores",
+    x = "Operador",
+    y = "Cantidad de Casos"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Ahora determinamos los costos por operador: 
+```{r}
+costos_por_operador <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017 & !is.na(`Operator.Name`)) %>%
+  group_by(`Operator.Name`) %>%
+  summarise(Total_Costos = sum(`All.Costs`, na.rm = TRUE)) %>%
+  arrange(desc(Total_Costos))
+
+```
+
+Determinamos el top 10 de operadores con mayores costos por accidentes en ductos: 
+```{r}
+top_10_costos <- costos_por_operador %>%
+  slice_max(order_by = Total_Costos, n = 10)
+```
+
+Graficamos lo anterior
+```{r}
+ggplot(top_10_costos, aes(x = reorder(`Operator.Name`, -Total_Costos), y = Total_Costos)) +
+  geom_bar(stat = "identity", fill = "yellow") +
+  labs(
+    title = "Top 10 Mayores Costos Operadores",
+    x = "Operador",
+    y = "Total Costos"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Ahora queremos saber si coincide el top 10 de casos con el top 10 de costos y lo graficamos con un grafico de burbujas:
+```{r}
+interseccion_top_10 <- inner_join(top_10_casos, top_10_costos, by = "Operator.Name")
+```
+
+```{r}
+ggplot(interseccion_top_10, aes(x = Cantidad_Casos, y = Total_Costos, size = Total_Costos, label = `Operator.Name`)) +
+  geom_point(alpha = 0.7, color = "green") +
+  geom_text(vjust = -1, size = 3) +
+  scale_size_continuous(range = c(4, 12)) +
+  labs(
+    title = "Top Operadores por Casos y Costos",
+    x = "Cantidad de Casos",
+    y = "Costos Totales (USD)",
+    size = "Costo Total"
+  ) +
+  theme_minimal()
+```
+
+Probamos con otra forma de cruzar las tablas, ya que no el grafico propuesto no brinda mucha info:
+Determinamos otro cruce de tablas y lo graficamos:
+```{r}
+top_10_combinado <- inner_join(top_10_casos, costos_por_operador, by = "Operator.Name")
+```
+
+
+```{r}
+ggplot(top_10_combinado, aes(x = Cantidad_Casos, y = Total_Costos, size = Total_Costos, label = `Operator.Name`)) +
+  geom_point(alpha = 0.7, color = "magenta") +
+  geom_text(vjust = -1, size = 3) +
+  scale_size_continuous(range = c(4, 12)) +
+  labs(
+    title = "Top Operadores por Casos y Costos",
+    x = "Cantidad de Casos",
+    y = "Costos Totales (USD)",
+    size = "Costo Total"
+  ) +
+  theme_minimal()
+
+```
+Acomodamos el grafico dado que las etiquetas se superponen y no lo hacen claro
+```{r}
+install.packages("ggrepel")
+library(ggrepel)
+```
+Y volvemos a graficar...
+
+```{r}
+ggplot(top_10_combinado, aes(x = Cantidad_Casos, y = Total_Costos, size = Total_Costos, label = `Operator.Name`)) +
+  geom_point(alpha = 0.7, color = "magenta") +
+  geom_text_repel(size = 3) +
+  scale_size_continuous(range = c(4, 12)) +
+  labs(
+    title = "Top Operadores por Casos y Costos",
+    x = "Cantidad de Casos",
+    y = "Costos Totales (USD)",
+    size = "Costo Total"
+  ) 
+
+  theme_minimal()
+```
+
+Ahora, realizamos el analisis de fatalidades y lesiones totales por año
+```{r}
+fatalidades_lesionados_anuales <- accidentes_df %>%
+    filter(`Accident.Year` <= 2017) %>%
+    group_by(`Accident.Year`) %>%
+    summarise(
+      Fatalidades = sum(`All.Fatalities`, na.rm = TRUE),
+      Lesionados = sum(`All.Injuries`, na.rm = TRUE)
+    )
+
+```
+
+Si lo vemos como una tabla: 
+```{r}
+print(fatalidades_lesionados_anuales)
+```
+
+
+Desglosamos por tipo de afectado y lo graficamos.
+```{r}
+  afectados_tipo <- accidentes_df %>%
+    filter(`Accident.Year` <= 2017) %>%
+    summarise(
+      Empleados = sum(`Operator.Employee.Fatalities`, na.rm = TRUE),
+      Contratistas = sum(`Operator.Contractor.Fatalities`, na.rm = TRUE),
+      Rescatistas = sum(`Emergency.Responder.Fatalities`, na.rm = TRUE),
+      Publico = sum(`Public.Fatalities`, na.rm = TRUE),
+      Otros = sum(`Other.Fatalities`, na.rm = TRUE)
+    ) %>%
+    pivot_longer(everything(), names_to = "Tipo", values_to = "Cantidad")
+```
+
+```{r}
+ ggplot(afectados_tipo, aes(x = "", y = Cantidad, fill = Tipo)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    labs(
+      title = "Distribución de Fatalidades por Tipo de Afectado",
+      x = NULL,
+      y = NULL,
+      fill = "Tipo de Afectado"
+    ) +
+    theme_void()
+```
+Lo resonante del grafico anterior es que hubieron fatalidades. 
+ 
+  
+Veamos ahora el top 10 de operadores relacionados a fatalidades y lesionados:
+```{r}
+impacto_humano_por_operador <- accidentes_df %>%
+    filter(`Accident.Year` <= 2017, !is.na(`Operator.Name`)) %>%
+    group_by(`Operator.Name`) %>%
+    summarise(
+      Total_Fatalidades = sum(`All.Fatalities`, na.rm = TRUE),
+      Total_Lesionados = sum(`All.Injuries`, na.rm = TRUE),
+      Total_Afectados = Total_Fatalidades + Total_Lesionados
+    ) %>%
+    arrange(desc(Total_Afectados))
+```
+
+
+Determinamos el top 10 y lo graficamos.
+```{r}
+top_10_afectados <- impacto_humano_por_operador %>%
+  slice_max(order_by = Total_Afectados, n = 10)
+```
+
+```{r}
+ggplot(top_10_afectados, aes(x = reorder(`Operator.Name`, -Total_Afectados), y = Total_Afectados)) +
+  geom_bar(stat = "identity", fill = "#E41A1C") +
+  labs(
+    title = "Top 10 Operadores con Mayor Cantidad de Afectados (Fatalidades + Lesionados)",
+    x = "Operador",
+    y = "Cantidad de Afectados"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+Pero queremos destacar entre fatalidades y lesiones y verlo en un grafico:
+```{r}
+top_10_afectados_2 <- top_10_afectados %>%
+  select(`Operator.Name`, Total_Fatalidades, Total_Lesionados) %>%
+  pivot_longer(
+    cols = c(Total_Fatalidades, Total_Lesionados),
+    names_to = "Tipo",
+    values_to = "Cantidad"
+  ) %>%
+  mutate(Tipo = recode(Tipo,
+                       "Total_Fatalidades" = "Fatalidades",
+                       "Total_Lesionados" = "Lesionados"))
+```
+
+```{r}
+ggplot(top_10_afectados_2, aes(x = reorder(`Operator.Name`, -Cantidad), y = Cantidad, fill = Tipo)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Top 10 Operadores con Mayor Cantidad de Afectados",
+    x = "Operador",
+    y = "Cantidad de Personas",
+    fill = "Tipo de Afectado"
+  ) +
+  scale_fill_manual(values = c("Fatalidades" = "#D73027", "Lesionados" = "#4575B4")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+El gráfico anterior muestra el Top 10 de operadores que concentraron la mayor cantidad de personas afectadas por accidentes en oleoductos entre 2010 y 2017, considerando tanto fatalidades como lesionados.
+
+Se observa que, si bien la mayoría de los casos corresponden a personas lesionadas, algunos operadores presentan una proporción significativa de fatalidades dentro de su total de afectados. Este desglose permite diferenciar entre operadores que tuvieron numerosos eventos con consecuencias moderadas y aquellos que, aunque quizás con menos eventos, generaron un impacto más grave.
+
+Este análisis es clave para enfocar estrategias regulatorias y de fiscalización sobre aquellos operadores que representan un mayor riesgo para la seguridad de las personas, más allá del volumen total de incidentes.
+
+Evaluamos el daño ambiental generado:
+  
+```{r}
+  derrames <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017) %>%
+  group_by(`Accident.Year`) %>%
+  summarise(Volumen_Derramado = sum(`Net.Loss..Barrels.`, na.rm = TRUE))
+```
+
+
+Graficamos el volumen derramado a lo largo del periodo:
+```{r}
+ggplot(derrames, aes(x = `Accident.Year`, y = Volumen_Derramado)) +
+  geom_line(color = "#1B9E77", size = 1.2) +
+  labs(
+    title = "Volumen de Crudo Derramado por Año",
+    x = "Año del Accidente",
+    y = "Barriles Perdidos"
+  ) +
+  theme_minimal()
+```
+
+
+Determinamos los costos por daño ambiental y lo graficamos: 
+```{r}
+costos_ambientales_anuales <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017) %>%
+  group_by(`Accident.Year`) %>%
+  summarise(Costos_Remediacion = sum(`Environmental.Remediation.Costs`, na.rm = TRUE))
+```
+
+
+```{r}
+ggplot(costos_ambientales_anuales, aes(x = `Accident.Year`, y = Costos_Remediacion)) +
+  geom_line(color = "#D95F02", size = 1.2) +
+  labs(
+    title = "Costos de Remediación Ambiental por Año",
+    x = "Año",
+    y = "Costos (USD)"
+  ) +
+  theme_minimal()
+```
+
+
+Relacion entre costos y volumenes derramados y su grafico correspondiente.
+```{r}
+relacion_derrames_costos <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017) %>%
+  group_by(`Accident.Year`) %>%
+  summarise(
+    Volumen = sum(`Net.Loss..Barrels.`, na.rm = TRUE),
+    Costo = sum(`Environmental.Remediation.Costs`, na.rm = TRUE)
+  )
+```
+
+
+```{r}
+ggplot(relacion_derrames_costos, aes(x = Volumen, y = Costo)) +
+  geom_point(size = 3, color = "#7570B3") +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(
+    title = "Relación entre Volumen Derramado y Costo de Remediación",
+    x = "Barriles Perdidos",
+    y = "Costos Ambientales (USD)"
+  ) +
+  theme_minimal()
+```
+
+
+Determinamos el top 10 de operadores con mayores derrames: 
+```{r}
+top_10_ambiental <- accidentes_df %>%
+  filter(`Accident.Year` <= 2017, !is.na(`Operator.Name`)) %>%
+  group_by(`Operator.Name`) %>%
+  summarise(
+    Volumen_Derramado = sum(`Net.Loss..Barrels.`, na.rm = TRUE),
+    Costo_Ambiental = sum(`Environmental.Remediation.Costs`, na.rm = TRUE)
+  ) %>%
+  mutate(Impacto_Ambiental = Volumen_Derramado + Costo_Ambiental) %>%
+  arrange(desc(Impacto_Ambiental)) %>%
+  slice_max(order_by = Impacto_Ambiental, n = 10)
+
+```
+
+Finalmente, armamos un tablero general para identificar los operadores top 10 segun cada tipo de daño: 
+```{r}
+top_10_casos <- top_10_casos %>%
+  mutate(Metrica = "Cantidad de Casos") %>%
+  select(`Operator.Name`, Valor = Cantidad_Casos, Metrica)
+
+top_10_costos <- top_10_costos %>%
+  mutate(Metrica = "Costos Totales") %>%
+  select(`Operator.Name`, Valor = Total_Costos, Metrica)
+
+top_10_afectados_simple <- top_10_afectados %>%
+  mutate(Metrica = "Personas Afectadas") %>%
+  select(`Operator.Name`, Valor = Total_Afectados, Metrica)
+
+top_10_ambiental_simple <- top_10_ambiental %>%
+  mutate(Metrica = "Daño Ambiental") %>%
+  select(`Operator.Name`, Valor = Impacto_Ambiental, Metrica)
+```
+
+
+Los unimos todos y los graficamos con un facet wrap
+```{r}
+top10_general <- bind_rows(
+  top_10_casos,
+  top_10_costos,
+  top_10_afectados_simple,
+  top_10_ambiental_simple
+)
+
+```
+
+
+```{r}
+ggplot(top10_general, aes(x = reorder(`Operator.Name`, Valor), y = Valor, fill = Metrica)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  facet_wrap(~ Metrica, scales = "free", ncol = 2) +
+  coord_flip() +
+  labs(
+    title = "Top 10 de Operadores según Distintos Tipos de Impacto",
+    x = "Operador",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+## Analisis de Importaciones de Crudo de Estados Unidos
+Descargamos el archivo "imp_crudo.csv", desplegamos su vision general, nombres de columnas y tipos de datos:
+
+```{r}
+importaciones_df <- read_csv("imp_crudo.csv")
+
+head(importaciones_df)
+
+colnames(importaciones_df)
+
+#str(importaciones_df)
+
+```
+
+Determinamos la evolucion de importaciones anuales. Para esto, considerando los hallazgos del analisis de los accidentes en ductos, solamente nos centramos en el periodo 2010 a 2017.
+```{r}
+importaciones_anuales <- importaciones_df %>%
+  filter(`year`>=2010 & `year`<=2017) %>%
+  group_by(year) %>%
+  summarise(Volumen_Total = sum(quantity, na.rm = TRUE))
+```
+
+Graficamos lo mencionado:
+```{r}
+ggplot(importaciones_anuales, aes(x = year, y = Volumen_Total)) +
+  geom_line(size = 1.2, color = "#1F78B4") +
+  labs(
+    title = "Volumen Total de Importaciones de Crudo por Año",
+    x = "Año",
+    y = "Volumen (barriles)"
+  ) +
+  theme_minimal()
+```
+Determinamos el top 10 de los paises de origen, en ese periodo y lo graficamos:
+```{r}
+top_paises <- importaciones_df %>%
+  filter(`year`>=2010 & `year`<=2017) %>%
+  group_by(originName) %>%
+  summarise(Volumen = sum(quantity, na.rm = TRUE)) %>%
+  arrange(desc(Volumen)) %>%
+  slice_max(order_by = Volumen, n = 10)
+
+```
+
+```{r}
+
+ggplot(top_paises, aes(x = reorder(originName, Volumen), y = Volumen)) +
+  geom_bar(stat = "identity", fill = "#33A02C") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Países Exportadores de Crudo a EE.UU.",
+    x = "País de Origen",
+    y = "Volumen Total (barriles)"
+  ) +
+  theme_minimal()
+```
+
+En las sentencias estamos ignorando los NA, pero suman volumen?
+```{r}
+importaciones_df %>%
+  count(is.na(originName))
+
+importaciones_df %>%
+  filter(originName=NA)%>%
+  summarise(Volumen = sum(quantity, na.rm = TRUE))
+```
+
+La respuesta es no, no suman volumen, por lo tanto se pueden obviar.
+
+Top 10 destinos
+```{r}
+top_destinos <- importaciones_df %>%
+  group_by(destinationName) %>%
+  summarise(Volumen = sum(quantity, na.rm = TRUE)) %>%
+  arrange(desc(Volumen)) %>%
+  slice_max(order_by = Volumen, n = 10)
+print(top_destinos)
+```
+
+Top 10 crudos mas importados
+```{r}
+tipos_crudo <- importaciones_df %>%
+  group_by(gradeName) %>%
+  summarise(Volumen = sum(quantity, na.rm = TRUE)) %>%
+  arrange(desc(Volumen)) %>%
+  slice_max(order_by = Volumen, n = 10)
+print(tipos_crudo)
+```
+
